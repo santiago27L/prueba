@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Crypto - Derivadas</title>
+    <!-- Cargamos Chart.js para las gráficas -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .container { display: flex; flex-wrap: wrap; gap: 20px; max-width: 1200px; margin: 0 auto; }
+        .panel-izquierdo { flex: 1; min-width: 300px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .panel-derecho { flex: 2; min-width: 500px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        
+        h2, h3 { margin-top: 0; color: #2c3e50; }
+        input[type="number"] { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background-color: #2980b9; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; font-weight: bold; }
+        button:hover { background-color: #3498db; }
+        button.btn-rojo { background-color: #e74c3c; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; font-size: 14px; }
+        .positivo { color: green; font-weight: bold; }
+        .negativo { color: red; font-weight: bold; }
+        
+        textarea { width: 100%; height: 150px; margin-top: 10px; padding: 10px; font-family: monospace; font-size: 12px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; resize: none; }
+
+        /* Estilos para las mini gráficas */
+        .mini-charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+            max-width: 1200px;
+            margin: 20px auto 0 auto;
+        }
+        .mini-chart-card {
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .mini-chart-card h4 { margin: 0 0 10px 0; font-size: 14px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Panel Izquierdo: Controles y Datos -->
+    <div class="panel-izquierdo">
+        <h2>Control de Inversión</h2>
+        <label>Monto a invertir ($):</label>
+        <input type="number" id="montoInput" value="1000" min="1">
+        <button id="btnToggle" onclick="toggleMonitoreo()">Iniciar Carrera Crypto</button>
+
+        <h3 style="margin-top: 25px;">Estado del Portafolio</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Cripto</th>
+                    <th>Precio Actual</th>
+                    <th>Retorno Neto</th>
+                </tr>
+            </thead>
+            <tbody id="tablaCriptos">
+                <!-- Se llena por JavaScript -->
+            </tbody>
+        </table>
+
+        <h3 style="margin-top: 25px;">Alertas (Ganancias)</h3>
+        <textarea id="consolaAlertas" readonly placeholder="Aquí aparecerán las alertas..."></textarea>
+    </div>
+
+    <!-- Panel Derecho: Gráfica Principal -->
+    <div class="panel-derecho">
+        <h2 id="tituloGrafica">Rendimiento (Descontada doble comisión 0.3%)</h2>
+        <canvas id="graficaCrypto"></canvas>
+    </div>
+</div>
+
+<!-- Contenedor de Mini Gráficas para las Derivadas -->
+<div id="miniChartsContenedor" class="mini-charts-grid">
+    <!-- Se llena por JavaScript -->
+</div>
+
+<script>
+    const monedas = {
+        "BTCUSDT": { nombre: "BTC", color: "blue" },
+        "XRPUSDT": { nombre: "XRP", color: "#d4af37" },
+        "ETHUSDT": { nombre: "ETH", color: "green" },
+        "BNBUSDT": { nombre: "BNB", color: "darkorange" },
+        "SOLUSDT": { nombre: "SOL", color: "purple" }
+    };
+
+    let ejecutando = false;
+    let intervaloId = null;
+    let inversionInicial = 0;
+    let cantidadesCompradas = {};
+    let estadoAlerta = {};
+    
+    // Variables de gráficas
+    let ctxPrincipal = document.getElementById('graficaCrypto').getContext('2d');
+    let chartPrincipal = null;
+    let miniCharts = {};
+    
+    // Historial para calcular las derivadas
+    let historialPrecios = {}; 
+
+    // Inicializar Tablas y Contenedores HTML
+    function inicializarUI() {
+        const tbody = document.getElementById('tablaCriptos');
+        const miniCont = document.getElementById('miniChartsContenedor');
+        
+        tbody.innerHTML = '';
+        miniCont.innerHTML = '';
+
+        for (let sim in monedas) {
+            // Fila de la tabla
+            tbody.innerHTML += `
+                <tr>
+                    <td style="color:${monedas[sim].color}; font-weight:bold;">${monedas[sim].nombre}</td>
+                    <td id="precio-${sim}">$0.00</td>
+                    <td id="retorno-${sim}">$0.00</td>
+                </tr>
+            `;
+            
+            // Tarjeta de Mini Gráfica
+            miniCont.innerHTML += `
+                <div class="mini-chart-card">
+                    <h4>${monedas[sim].nombre} - Análisis Numérico</h4>
+                    <canvas id="mini-${sim}"></canvas>
+                </div>
+            `;
+            
+            estadoAlerta[sim] = false;
+            historialPrecios[sim] = [];
+        }
+    }
+
+    // Configurar todas las gráficas (Principal y las 5 Minis)
+    function configurarGraficas() {
+        if (chartPrincipal) chartPrincipal.destroy();
+        
+        // 1. Gráfica Principal
+        let datasetsInit = [{
+            label: 'Inversión Total', data: [], borderColor: 'red', borderDash: [5, 5], fill: false, borderWidth: 2, pointRadius: 0
+        }];
+
+        for (let sim in monedas) {
+            datasetsInit.push({
+                label: monedas[sim].nombre, data: [], borderColor: monedas[sim].color, fill: false, tension: 0.1, pointRadius: 3
+            });
+        }
+
+        chartPrincipal = new Chart(ctxPrincipal, {
+            type: 'line',
+            data: { labels: [], datasets: datasetsInit },
+            options: { responsive: true, animation: false, scales: { x: { title: { display: true, text: 'Hora' } } } }
+        });
+
+        // 2. Gráficas Pequeñas (Derivadas)
+        for (let sim in monedas) {
+            if (miniCharts[sim]) miniCharts[sim].destroy();
+            
+            let ctxMini = document.getElementById(`mini-${sim}`).getContext('2d');
+            miniCharts[sim] = new Chart(ctxMini, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Velocidad (1ra Deriv)', data: [], borderColor: '#2ecc71', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+                        { label: 'Aceleración (2da Deriv)', data: [], borderColor: '#e67e22', borderDash: [3, 3], borderWidth: 1.5, pointRadius: 0, tension: 0.2 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    animation: false,
+                    plugins: { legend: { labels: { boxWidth: 10, font: { size: 10 } } } },
+                    scales: {
+                        x: { display: false }, // Ocultamos la hora para ahorrar espacio
+                        y: { title: { display: false } }
+                    }
+                }
+            });
+        }
+    }
+
+    // Consulta a la API de Binance
+    async function obtenerPrecios() {
+        try {
+            const simbolosArr = Object.keys(monedas).map(s => `"${s}"`);
+            const url = `https://api.binance.com/api/v3/ticker/price?symbols=[${simbolosArr.join(',')}]`;
+            const respuesta = await fetch(url);
+            const datos = await respuesta.json();
+            
+            let precios = {};
+            datos.forEach(item => { precios[item.symbol] = parseFloat(item.price); });
+            return precios;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    // Botón Iniciar / Detener
+    async function toggleMonitoreo() {
+        const btn = document.getElementById('btnToggle');
+        const inputMonto = document.getElementById('montoInput');
+
+        if (!ejecutando) {
+            inversionInicial = parseFloat(inputMonto.value);
+            if (isNaN(inversionInicial) || inversionInicial <= 0) return alert("Ingresa un monto válido.");
+
+            const precios = await obtenerPrecios();
+            if (!precios) return alert("Error de red con Binance."); 
+
+            ejecutando = true;
+            btn.textContent = "Detener Carrera";
+            btn.classList.add('btn-rojo');
+            inputMonto.disabled = true;
+
+            const montoReal = inversionInicial * 0.997;
+            for (let sim in monedas) {
+                cantidadesCompradas[sim] = montoReal / precios[sim];
+                estadoAlerta[sim] = false;
+                historialPrecios[sim] = []; // Reiniciamos historiales
+            }
+
+            configurarGraficas();
+            actualizarDatos();
+            intervaloId = setInterval(actualizarDatos, 10000); 
+
+        } else {
+            ejecutando = false;
+            btn.textContent = "Iniciar Carrera Crypto";
+            btn.classList.remove('btn-rojo');
+            inputMonto.disabled = false;
+            clearInterval(intervaloId);
+        }
+    }
+
+    // Lógica de actualización (Datos y Matemáticas)
+    async function actualizarDatos() {
+        const precios = await obtenerPrecios();
+        if (!precios) return;
+
+        const ahora = new Date();
+        const horaStr = ahora.getHours().toString().padStart(2, '0') + ":" + ahora.getMinutes().toString().padStart(2, '0') + ":" + ahora.getSeconds().toString().padStart(2, '0');
+
+        // Main chart array management
+        chartPrincipal.data.labels.push(horaStr);
+        if (chartPrincipal.data.labels.length > 20) chartPrincipal.data.labels.shift();
+
+        chartPrincipal.data.datasets[0].data.push(inversionInicial);
+        if (chartPrincipal.data.datasets[0].data.length > 20) chartPrincipal.data.datasets[0].data.shift();
+
+        const textarea = document.getElementById('consolaAlertas');
+        let indexDataset = 1;
+
+        for (let sim in monedas) {
+            const precioActual = precios[sim];
+            const usdNeto = (cantidadesCompradas[sim] * precioActual) * 0.997;
+
+            // 1. Actualizar Tablas
+            document.getElementById(`precio-${sim}`).textContent = `$${precioActual.toFixed(4)}`;
+            const celdaRetorno = document.getElementById(`retorno-${sim}`);
+            celdaRetorno.textContent = `$${usdNeto.toFixed(2)}`;
+            celdaRetorno.className = (usdNeto >= inversionInicial) ? "positivo" : "negativo";
+
+            // 2. Gráfica Principal
+            chartPrincipal.data.datasets[indexDataset].data.push(usdNeto);
+            if (chartPrincipal.data.datasets[indexDataset].data.length > 20) chartPrincipal.data.datasets[indexDataset].data.shift();
+            indexDataset++;
+
+            // 3. Cálculos de Derivadas (Velocidad y Aceleración)
+            historialPrecios[sim].push(usdNeto);
+            if (historialPrecios[sim].length > 22) historialPrecios[sim].shift(); // Mantenemos un poco extra para las fórmulas
+
+            let d1 = 0; // 1ra derivada (Velocidad)
+            let d2 = 0; // 2da derivada (Aceleración)
+            let n = historialPrecios[sim].length;
+
+            if (n >= 2) {
+                // Velocidad actual: Precio Actual - Precio Anterior
+                d1 = historialPrecios[sim][n-1] - historialPrecios[sim][n-2];
+            }
+            if (n >= 3) {
+                // Velocidad anterior: Precio Anterior - Precio Tras-anterior
+                let d1_prev = historialPrecios[sim][n-2] - historialPrecios[sim][n-3];
+                // Aceleración: Velocidad Actual - Velocidad Anterior
+                d2 = d1 - d1_prev;
+            }
+
+            // 4. Actualizar Mini Gráficas
+            miniCharts[sim].data.labels.push(horaStr);
+            if (miniCharts[sim].data.labels.length > 20) miniCharts[sim].data.labels.shift();
+
+            miniCharts[sim].data.datasets[0].data.push(d1); // Velocidad
+            if (miniCharts[sim].data.datasets[0].data.length > 20) miniCharts[sim].data.datasets[0].data.shift();
+
+            miniCharts[sim].data.datasets[1].data.push(d2); // Aceleración
+            if (miniCharts[sim].data.datasets[1].data.length > 20) miniCharts[sim].data.datasets[1].data.shift();
+
+            miniCharts[sim].update();
+
+            // 5. Alertas
+            if (usdNeto > inversionInicial && !estadoAlerta[sim]) {
+                estadoAlerta[sim] = true;
+                textarea.value = `[${horaStr}] 🚀 ¡${monedas[sim].nombre} superó la inversión! ($${usdNeto.toFixed(2)})\n` + textarea.value;
+            } else if (usdNeto <= inversionInicial) {
+                estadoAlerta[sim] = false;
+            }
+        }
+
+        chartPrincipal.update();
+    }
+
+    inicializarUI();
+</script>
+
+</body>
+</html>
